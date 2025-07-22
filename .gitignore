@@ -1,0 +1,9 @@
+
+.vs
+.vscode/
+.idea/
+
+vcpkg/
+Debug/
+Release/
+build/
