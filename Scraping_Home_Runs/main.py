@@ -201,6 +201,38 @@ class CSVProcessor:
             print(f"Error searching for player {player_name}: {e}")
             return False
     
+    def extract_home_run_line(self, player_name):
+        """Extract home run line value from search results"""
+        try:
+            wait = WebDriverWait(self.driver, 5)  # Wait up to 5 seconds
+            
+            # Find div with aria-label containing 'To Hit A Home Run' and role='button'
+            try:
+                home_run_div = wait.until(EC.presence_of_element_located((
+                    By.XPATH, 
+                    "//div[contains(@aria-label, 'To Hit A Home Run') and @role='button']"
+                )))
+                
+                # Get the span value inside the div
+                span_element = home_run_div.find_element(By.TAG_NAME, "span")
+                home_run_value = span_element.text.strip()
+                
+                if home_run_value:
+                    print(f"Found home run line value: {home_run_value}")
+                    return home_run_value
+                    
+            except Exception as e:
+                print(f"Could not find home run line")
+                return "NM"
+            
+            # If no value found within 5 seconds, return "NM"
+            print(f"No home run line value found for {player_name}, returning NM")
+            return "NM"
+                    
+        except Exception as e:
+            print(f"Error extracting home run line for {player_name}")
+            return "NM"
+    
     def process_csv(self):
         """Read CSV file and iterate through each row's Player Name to add Home run line column and save."""
         if not self.file_path:
@@ -225,16 +257,16 @@ class CSVProcessor:
                 search_success = self.search_player(player_name)
                 
                 if search_success:
-                    # TODO: Add code here to extract home run line data from search results
-                    # For now, setting a placeholder value
-                    df.at[index, 'Home run line'] = 'SEARCHED'  # Changed from 'NM' to indicate search was performed
-                    print(f"Successfully searched for {player_name}")
+                    # Extract home run line value from search results
+                    home_run_value = self.extract_home_run_line(player_name)
+                    df.at[index, 'Home run line'] = home_run_value
+                    print(f"Successfully processed {player_name}: {home_run_value}")
                 else:
                     df.at[index, 'Home run line'] = 'SEARCH_FAILED'
                     print(f"Failed to search for {player_name}")
                 
                 # Add a small delay between searches to avoid overwhelming the site
-                time.sleep(5)
+                time.sleep(1)
             
             # Save with processed_ prefix
             file_dir = os.path.dirname(self.file_path)
