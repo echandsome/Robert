@@ -141,7 +141,7 @@ def scrape_page_data(driver, num_games, stat_category):
                     # Extract number
                     try:
                         number_element = WebDriverWait(card, 30).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "div.flex.player-prop-card__prop-container span.typography[style*='--48359156: left'][style*='--2a6287d2: #16191D']"))
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "div.flex.player-prop-card__prop-container span.typography:not(.player-prop-card__market)[style*='--9f36f340: var(--neutral-900, #16191D)']"))
                         )
                         number = number_element.text.strip() if number_element else "N/A"
                     except Exception as e:
@@ -152,7 +152,7 @@ def scrape_page_data(driver, num_games, stat_category):
                     # Extract odds
                     try:
                         odds_element = WebDriverWait(card, 30).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "span.typography:not(.player-prop-card__team-pos)[style*='--2a6287d2: #525A67']"))
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "span.typography:not(.player-prop-card__team-pos)[style*='--9f36f340: var(--neutral-800, #525A67)']"))
                         )
                         odds = odds_element.text.strip() if odds_element else "N/A"
                     except Exception as e:
@@ -163,7 +163,7 @@ def scrape_page_data(driver, num_games, stat_category):
                     # Extract projection
                     try:
                         projection_element = WebDriverWait(card, 30).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "span[style*='--2a6287d2: #1F845A'], span[style*='--2a6287d2: #C9372C']"))
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "span[style*='--9f36f340: var(--green-400, #1F845A)'], span[style*='--9f36f340: var(--red-400, #C9372C)']"))
                         )
                         projection = projection_element.text.strip() if projection_element else "N/A"
                     except Exception as e:
@@ -272,6 +272,20 @@ def scrape_selected_stats():
         # Wait for the page to load completely
         WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
 
+        # Handle cookie consent banner first
+        try:
+            # Try to find and close cookie consent banner
+            cookie_banner = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.ID, "onetrust-policy-text"))
+            )
+            # Look for accept button in the banner
+            accept_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Accept') or contains(text(), 'Accept All') or contains(text(), 'OK')]")
+            accept_button.click()
+            print("Closed cookie consent banner")
+            time.sleep(2)  # Wait for banner to disappear
+        except Exception as e:
+            print("No cookie banner found or already handled")
+
         for option in selected_options:
             stat_name = STAT_OPTIONS[option]["name"]
             stat_xpath = STAT_OPTIONS[option]["xpath"]
@@ -287,10 +301,13 @@ def scrape_selected_stats():
 
             # Click the button corresponding to the current stat
             try:
+                # Wait for the element to be present and clickable
                 button = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((By.XPATH, stat_xpath))
                 )
+                
                 button.click()
+                
                 print(f"Clicked on {stat_name}")
             except Exception as e:
                 print(f"Error clicking on {stat_name}: {e}")
@@ -310,8 +327,9 @@ def scrape_selected_stats():
                 try:
                     # Wait until the next button is clickable
                     next_button = WebDriverWait(driver, 30).until(EC.element_to_be_clickable((By.XPATH, next_button_xpath)))
-                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(0.5)
+                    # Scroll to the button to ensure it's visible
+                    driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", next_button)
+                    time.sleep(1)
                     
                     if "disabled" not in next_button.get_attribute("outerHTML"):
                         next_button.click()
