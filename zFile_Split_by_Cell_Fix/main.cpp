@@ -162,9 +162,11 @@ void split_file_by_column(const std::wstring& file_path, const std::string& colu
         throw std::runtime_error("Column letter exceeds available columns in the file.");
     }
     
-    // Create outputs folder in same directory
+    // Create output folder by appending "output" to the input file name
     std::wstring base_dir = file_path.substr(0, file_path.find_last_of(L'\\'));
-    std::wstring output_dir = base_dir + L"\\outputs";
+    std::wstring file_name = file_path.substr(file_path.find_last_of(L'\\') + 1);
+    std::wstring file_name_without_ext = file_name.substr(0, file_name.find_last_of(L'.'));
+    std::wstring output_dir = base_dir + L"\\" + file_name_without_ext + L"_output";
     std::filesystem::create_directories(output_dir);
     
     // Group data by the specified column
@@ -215,8 +217,8 @@ void ProcessSplit(const std::wstring& file_path, const std::string& column_lette
         
         split_file_by_column(file_path, column_letter);
         
-        SetWindowTextW(hStatusText, L"Split complete! Files saved in 'outputs' folder.");
-        MessageBoxW(hMainWindow, L"Split complete! Files saved in 'outputs' folder.", L"Success", MB_OK | MB_ICONINFORMATION);
+        SetWindowTextW(hStatusText, L"Split complete! Files saved in '[filename]_output' folder.");
+        MessageBoxW(hMainWindow, L"Split complete! Files saved in '[filename]_output' folder.", L"Success", MB_OK | MB_ICONINFORMATION);
     }
     catch (const std::exception& e) {
         std::wstring err = L"Error: ";

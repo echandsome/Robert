@@ -17,7 +17,7 @@
 namespace fs = std::filesystem;
 using Row = std::vector<std::string>;
 using DataFrame = std::vector<Row>;
-
+// This C++ code is a GUI application that processes Excel files in bulk, similar to a Python script.
 // ==== Globals ====
 HWND hInputEntry, hStatus, hProcessBtn, hDegreeCheck;
 HWND hRadioBtns[6];
@@ -75,19 +75,6 @@ DataFrame read_excel(const std::string &path) {
     return df;
 }
 
-// Helper function to create a key for grouping (matching Python's groupby logic)
-std::string make_group_key(const Row &row, const std::vector<int> &col_indices) {
-    std::string key;
-    for (int idx : col_indices) {
-        if (idx < (int)row.size()) {
-            key += row[idx] + "|";
-        } else {
-            key += "|";
-        }
-    }
-    return key;
-}
-
 // Process file function matching Python logic exactly
 std::vector<std::map<std::string, std::string>> process_file(const DataFrame &df, bool is_degree,
                        const std::vector<std::pair<std::string,int>> &comb) {
@@ -103,8 +90,16 @@ std::vector<std::map<std::string, std::string>> process_file(const DataFrame &df
         
         if (is_degree) {
             selected_columns.push_back(get_next_column(item.first));
+            // For degree columns, the index should be the next consecutive index
+            // Since Excel columns are consecutive, we just add 1 to the original index
             col_indexes.push_back(item.second + 1);
         }
+    }
+    
+    // Debug: Print the exact column selection to match Python
+    std::cout << "Column selection (matching Python):" << std::endl;
+    for (size_t i = 0; i < selected_columns.size(); i++) {
+        std::cout << "  " << selected_columns[i] << " -> index " << col_indexes[i] << std::endl;
     }
     
     // Group data by selected columns (matching Python's groupby)
@@ -113,8 +108,15 @@ std::vector<std::map<std::string, std::string>> process_file(const DataFrame &df
     for (const auto &row : df) {
         if (row.size() <= 7) continue;
         
-        // Create group key
-        std::string group_key = make_group_key(row, col_indexes);
+        // Create group key using all selected columns (matching Python's groupby)
+        std::string group_key;
+        for (int idx : col_indexes) {
+            if (idx < (int)row.size()) {
+                group_key += row[idx] + "|";
+            } else {
+                group_key += "|";
+            }
+        }
         
         // Store the row with its result
         Row group_row;
@@ -125,7 +127,7 @@ std::vector<std::map<std::string, std::string>> process_file(const DataFrame &df
                 group_row.push_back("");
             }
         }
-        group_row.push_back(row[7]); // Result column
+        group_row.push_back(row[7]); // Result column (0-based index 7)
         groups[group_key].push_back(group_row);
     }
     
@@ -133,14 +135,16 @@ std::vector<std::map<std::string, std::string>> process_file(const DataFrame &df
     for (auto &[group_key, group_rows] : groups) {
         int over = 0, under = 0;
         
-        // Count results
+        // Count results exactly like Python
         for (const auto &row : group_rows) {
             if (row.empty()) continue;
             std::string result = row.back();
             std::transform(result.begin(), result.end(), result.begin(), ::tolower);
             
-            if (result == "over" || result == "win") over++;
-            if (result == "under" || result == "lose") under++;
+            if (result == "over") over++;
+            if (result == "win") over++;
+            if (result == "under") under++;
+            if (result == "lose") under++;
         }
         
         int total = over + under;
@@ -163,7 +167,10 @@ std::vector<std::map<std::string, std::string>> process_file(const DataFrame &df
         }
         
         row_dict["Total"] = std::to_string(total);
-        row_dict["WIN% OVER"] = std::to_string(round((double)over / total * 100.0) / 100.0);
+        // Python: round(over / total, 2) - gives decimal between 0 and 1
+        double win_percentage = (double)over / total;
+        win_percentage = std::round(win_percentage * 100.0) / 100.0;
+        row_dict["WIN% OVER"] = std::to_string(win_percentage);
         
         output_rows.push_back(row_dict);
     }
@@ -188,16 +195,19 @@ void combinations(const std::vector<std::pair<std::string,int>> &items, int k, i
 // Convert map to CSV row (matching Python's DataFrame.to_csv behavior)
 Row map_to_csv_row(const std::map<std::string, std::string> &row_dict) {
     Row csv_row;
-    // Order: Col_0, Col_0_val, Col_1, Col_1_val, ..., Total, WIN% OVER
+    
+    // Get all keys and sort them to ensure consistent ordering
     std::vector<std::string> keys;
     for (const auto &[key, value] : row_dict) {
         keys.push_back(key);
     }
     std::sort(keys.begin(), keys.end());
     
+    // Add values in sorted key order (matching Python's DataFrame.to_csv)
     for (const auto &key : keys) {
         csv_row.push_back(row_dict.at(key));
     }
+    
     return csv_row;
 }
 
@@ -299,8 +309,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             CreateWindowW(L"STATIC", L"Set Size:", WS_CHILD | WS_VISIBLE, 10, 100, 70, 20, hwnd, 0, 0, 0);
             int sizes[6] = {3, 4, 5, 6, 7, 8};
             for (int i = 0; i < 6; i++) {
+                DWORD style = WS_CHILD | WS_VISIBLE | BS_RADIOBUTTON;
+                if (i == 0) style |= WS_GROUP; // Group the radio buttons together
                 hRadioBtns[i] = CreateWindowW(L"BUTTON", (LPCWSTR)(std::to_wstring(sizes[i]).c_str()),
-                    WS_CHILD | WS_VISIBLE | BS_RADIOBUTTON, 80 + i * 50, 100, 40, 20, hwnd, (HMENU)(100 + i), 0, 0);
+                    style, 80 + i * 50, 100, 40, 20, hwnd, (HMENU)(100 + i), 0, 0);
             }
             SendMessageW(hRadioBtns[0], BM_SETCHECK, BST_CHECKED, 0);
             hProcessBtn = CreateWindowW(L"BUTTON", L"Process", WS_CHILD | WS_VISIBLE, 10, 140, 100, 30, hwnd, (HMENU)2, 0, 0);
@@ -312,7 +324,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 auto f = BrowseFolder();
                 if (!f.empty()) SetWindowTextW(hInputEntry, f.c_str());
             }
-            if (LOWORD(wp) == 2) {
+            else if (LOWORD(wp) == 2) {
                 wchar_t buf[260]; 
                 GetWindowTextW(hInputEntry, buf, 260); 
                 if (wcslen(buf) == 0) {
@@ -330,7 +342,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 EnableWindow(hProcessBtn, FALSE); 
                 SetWindowTextW(hStatus, L"Processing...");
                 std::thread([=] { RunProcessing(buf, deg, set_size); }).detach();
-            } 
+            }
+            else if (LOWORD(wp) >= 100 && LOWORD(wp) <= 105) {
+                // Handle radio button clicks
+                int clicked_index = LOWORD(wp) - 100;
+                for (int i = 0; i < 6; i++) {
+                    if (i == clicked_index) {
+                        SendMessageW(hRadioBtns[i], BM_SETCHECK, BST_CHECKED, 0);
+                    } else {
+                        SendMessageW(hRadioBtns[i], BM_SETCHECK, BST_UNCHECKED, 0);
+                    }
+                }
+            }
             break;
         }
         case WM_DESTROY: 

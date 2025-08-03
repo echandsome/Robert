@@ -17,12 +17,19 @@
 using Row = std::vector<std::string>;
 using DataFrame = std::vector<Row>;
 
-// Column mapping from Python code
+// Column mapping from Python code - generate columns from U to BK in steps of 2
+// Python: col_letters = [get_column_letter(i) for i in range(start_col, end_col + 1, 2)]
+// where start_col = column_index_from_string('U') = 21, end_col = column_index_from_string('BK') = 63
+std::vector<std::string> col_order = {
+    "U", "W", "Y", "AA", "AC", "AE", "AG", "AI", "AK", "AM", "AO", "AQ",
+    "AS", "AU", "AW", "AY", "BA", "BC", "BE", "BG", "BI", "BK"
+};
+
 std::map<std::string, int> col_num = {
-    {"U", 20}, {"W", 22}, {"Y", 24}, {"AA", 26}, {"AC", 28}, {"AE", 30},
-    {"AG", 32}, {"AI", 34}, {"AK", 36}, {"AM", 38}, {"AO", 40}, {"AQ", 42},
-    {"AS", 44}, {"AU", 46}, {"AW", 48}, {"AY", 50}, {"BA", 52}, {"BC", 54},
-    {"BE", 56}, {"BG", 58}, {"BI", 60}, {"BK", 62}
+    {"U", 21}, {"W", 23}, {"Y", 25}, {"AA", 27}, {"AC", 29}, {"AE", 31},
+    {"AG", 33}, {"AI", 35}, {"AK", 37}, {"AM", 39}, {"AO", 41}, {"AQ", 43},
+    {"AS", 45}, {"AU", 47}, {"AW", 49}, {"AY", 51}, {"BA", 53}, {"BC", 55},
+    {"BE", 57}, {"BG", 59}, {"BI", 61}, {"BK", 63}
 };
 
 class CSVManager {
@@ -107,10 +114,19 @@ private:
         xlnt::workbook wb;
         wb.load(ws2s(filename));
         auto ws = wb.active_sheet();
+        
+        // Read all rows (equivalent to pandas read_excel with header=None)
+        // Get the used range to ensure we read all data
+        auto range = ws.calculate_dimension();
         for (auto row : ws.rows(false)) {
             Row row_data;
             for (auto cell : row) {
-                row_data.push_back(cell.to_string());
+                // Convert cell to string, handling empty cells properly
+                if (cell.has_value()) {
+                    row_data.push_back(cell.to_string());
+                } else {
+                    row_data.push_back(""); // Empty cell
+                }
             }
             data.push_back(row_data);
         }
@@ -135,6 +151,8 @@ private:
     static void writeXLSXFile(const DataFrame& data, const std::wstring& filename) {
         xlnt::workbook wb;
         auto ws = wb.active_sheet();
+        
+        // Write data without headers (equivalent to pandas to_excel with index=False, header=None)
         for (size_t i = 0; i < data.size(); ++i) {
             for (size_t j = 0; j < data[i].size(); ++j) {
                 ws.cell(static_cast<uint32_t>(j + 1), static_cast<uint32_t>(i + 1)).value(data[i][j]);
@@ -176,10 +194,10 @@ std::string mapToRange(const std::string& val, const std::vector<std::string>& g
         }
     }
     catch (...) {
-        // If conversion fails, return original value
+        // If conversion fails, return original value (same as Python)
         return val;
     }
-    return val;
+    return val; // Return original value if no range matches
 }
 
 // Main processing logic
@@ -220,8 +238,7 @@ void ProcessFile() {
 
         // Get selected columns
         std::vector<std::string> selectedCols;
-        for (const auto& pair : col_num) {
-            const std::string& col = pair.first;
+        for (const auto& col : col_order) {
             if (hCheckboxes.find(col) != hCheckboxes.end()) {
                 if (SendMessageW(hCheckboxes[col], BM_GETCHECK, 0, 0) == BST_CHECKED) {
                     selectedCols.push_back(col);
@@ -238,11 +255,14 @@ void ProcessFile() {
         
         // Process selected columns
         for (const auto& col : selectedCols) {
-            int colIndex = col_num[col] - 1; // Convert to 0-based index
+            int colIndex = col_num[col] - 1; // Convert to 0-based index (Excel columns are 1-based)
             if (colIndex >= 0) {
                 for (auto& row : df) {
                     if (colIndex < static_cast<int>(row.size())) {
-                        row[colIndex] = mapToRange(row[colIndex], groupList);
+                        // Only process if the cell contains a numeric value
+                        if (!row[colIndex].empty()) {
+                            row[colIndex] = mapToRange(row[colIndex], groupList);
+                        }
                     }
                 }
             }
@@ -343,8 +363,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         // Create checkboxes for columns
         int checkboxId = 100;
         int row = 0, col = 0;
-        for (const auto& pair : col_num) {
-            const std::string& colName = pair.first;
+        for (const auto& colName : col_order) {
             std::wstring checkboxText = L"Column " + CSVManager::s2ws(colName);
             
             HWND hCheckbox = CreateWindowW(L"BUTTON", checkboxText.c_str(), 
