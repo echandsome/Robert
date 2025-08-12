@@ -15,6 +15,29 @@
 #include <set>
 #include <iomanip>
 #include <cmath>
+#include <chrono> // Added for timing
+
+// Custom messages for thread-safe GUI updates
+#define WM_UPDATE_PROGRESS (WM_USER + 100)
+#define WM_UPDATE_STATUS (WM_USER + 101)
+#define WM_UPDATE_PERCENT (WM_USER + 102)
+
+// Structure for progress update message
+struct ProgressUpdateData {
+    int progress_pos;
+    std::wstring status_text;
+    std::wstring percent_text;
+};
+
+// Global handles for GUI controls
+HWND hMainWindow = nullptr;
+HWND hInputEntry = nullptr;
+HWND hSetSizeVars[6] = {nullptr}; // Radio buttons for set sizes 3-8
+HWND hProcessButton = nullptr;
+HWND hStatusText = nullptr;
+HWND hProgressBar = nullptr;
+HWND hProgressPercent = nullptr; // New label for percentage display
+int selectedSetSize = 3; // Default set size is 3
 
 using Row = std::vector<std::string>;
 using DataFrame = std::vector<Row>;
@@ -23,6 +46,12 @@ using DataFrame = std::vector<Row>;
 const std::map<std::string, int> COLUMN_MAPPING = {
     {"AQ", 42}, {"AS", 44}, {"AU", 46}, {"AW", 48}, {"AY", 50}, {"BA", 52},
     {"BC", 54}, {"BE", 56}, {"BG", 58}, {"BI", 60}, {"BK", 62}
+};
+
+// Structure to hold combination data
+struct Combination {
+    std::string col_name;
+    int col_index;
 };
 
 // Structure to hold output row data
@@ -36,11 +65,20 @@ struct OutputRow {
     double win_percent_over;
 };
 
-// Structure to hold combination data
-struct Combination {
-    std::string col_name;
-    int col_index;
-};
+// Function declarations
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+void OnBrowseInput();
+void OnProcess();
+std::wstring OpenFolderDialog();
+void ProcessBulkFiles(const std::wstring& input_dir, int set_size);
+std::string processFileWrapper(const std::wstring& input_path, 
+                              const std::vector<std::vector<Combination>>& combinations,
+                              int set_size, 
+                              const std::wstring& output_dir,
+                              int file_index,
+                              int total_files,
+                              int& total_combinations_processed,
+                              const std::chrono::steady_clock::time_point& start_time);
 
 class CSVManager {
 public:
@@ -293,7 +331,11 @@ std::vector<OutputRow> processFile(const DataFrame& input_df, const std::vector<
 std::string processFileWrapper(const std::wstring& input_path, 
                               const std::vector<std::vector<Combination>>& combinations,
                               int set_size, 
-                              const std::wstring& output_dir) {
+                              const std::wstring& output_dir,
+                              int file_index,
+                              int total_files,
+                              int& total_combinations_processed,
+                              const std::chrono::steady_clock::time_point& start_time) {
     std::vector<OutputRow> all_results;
     
     try {
@@ -304,11 +346,63 @@ std::string processFileWrapper(const std::wstring& input_path,
         
         for (size_t comb_id = 0; comb_id < combinations.size(); ++comb_id) {
             const auto& combination = combinations[comb_id];
-                    std::wcout << L"  Combo " << (comb_id + 1) << L"/" << combinations.size() << L": ";
-        for (const auto& combo : combination) {
-            std::wcout << CSVManager::s2ws(combo.col_name) << L" ";
-        }
-        std::wcout << std::endl;
+            
+            // Update progress for each combination
+            total_combinations_processed++;
+            int total_work = total_files * combinations.size();
+            
+            // Calculate percentage for this specific file and combination
+            // Progress should be based on total combinations processed so far
+            double progress_ratio = (double)total_combinations_processed / total_work;
+            int progress_pos = (int)(progress_ratio * 100);
+            
+            // Ensure progress doesn't exceed 100%
+            if (progress_pos > 100) progress_pos = 100;
+            
+            // Prepare status text
+            std::wstring status = L"Processing: " + filename + L" - Combo " + 
+                                std::to_wstring(comb_id + 1) + L"/" + 
+                                std::to_wstring(combinations.size()) + L" (" + 
+                                std::to_wstring(file_index + 1) + L"/" + 
+                                std::to_wstring(total_files) + L")";
+            
+            // Calculate estimated time remaining
+            if (total_combinations_processed > 0) {
+                auto current_time = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time);
+                double avg_time_per_op = elapsed.count() / (double)total_combinations_processed;
+                int remaining_ops = total_work - total_combinations_processed;
+                int estimated_seconds = (int)(avg_time_per_op * remaining_ops);
+                
+                if (estimated_seconds > 0) {
+                    int minutes = estimated_seconds / 60;
+                    int seconds = estimated_seconds % 60;
+                    if (minutes > 0) {
+                        status += L" - ETA: " + std::to_wstring(minutes) + L"m " + std::to_wstring(seconds) + L"s";
+                    } else {
+                        status += L" - ETA: " + std::to_wstring(seconds) + L"s";
+                    }
+                }
+            }
+            
+            // Prepare percentage text
+            std::wstring percent_text = std::to_wstring(progress_pos) + L"%";
+            
+            // Send progress update message to main thread
+            if (hMainWindow) {
+                PostMessageW(hMainWindow, WM_UPDATE_PROGRESS, progress_pos, 0);
+                PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(status));
+                PostMessageW(hMainWindow, WM_UPDATE_PERCENT, 0, (LPARAM)new std::wstring(percent_text));
+            }
+            
+            // Small delay to make progress visible
+            Sleep(10);
+            
+            std::wcout << L"  Combo " << (comb_id + 1) << L"/" << combinations.size() << L": ";
+            for (const auto& combo : combination) {
+                std::wcout << CSVManager::s2ws(combo.col_name) << L" ";
+            }
+            std::wcout << std::endl;
             
             auto results = processFile(input_df, combination);
             all_results.insert(all_results.end(), results.begin(), results.end());
@@ -325,10 +419,10 @@ std::string processFileWrapper(const std::wstring& input_path,
             
             // Add header row
             Row header = {"Player"};
-                    for (size_t i = 1; i <= set_size; ++i) {
-            header.push_back("Col_" + std::to_string(i));
-            header.push_back("Val_" + std::to_string(i));
-        }
+            for (size_t i = 1; i <= set_size; ++i) {
+                header.push_back("Col_" + std::to_string(i));
+                header.push_back("Val_" + std::to_string(i));
+            }
             header.insert(header.end(), {"Count", "MATCH TOTAL", "WIN TOTAL", "WIN% OVER"});
             output_df.push_back(header);
             
@@ -370,28 +464,24 @@ std::string processFileWrapper(const std::wstring& input_path,
     }
 }
 
-// Global handles for GUI controls
-HWND hMainWindow;
-HWND hInputEntry;
-HWND hSetSizeVars[6]; // Radio buttons for set sizes 3-8
-HWND hProcessButton;
-HWND hStatusText;
-HWND hProgressBar;
-int selectedSetSize = 3; // Default set size is 3
-
-// Function declarations
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-void OnBrowseInput();
-void OnProcess();
-std::wstring OpenFolderDialog();
-
 // Main processing logic
 void ProcessBulkFiles(const std::wstring& input_dir, int set_size) {
     try {
-        SetWindowTextW(hStatusText, L"Generating combinations...");
+        if (hMainWindow) {
+            PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(L"Generating combinations..."));
+        }
         
         // Generate combinations
         auto combinations = generateCombinations(set_size);
+        
+        if (combinations.empty()) {
+            if (hMainWindow) {
+                PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(L"No combinations generated for the selected set size."));
+            }
+            MessageBoxW(hMainWindow, L"No combinations generated for the selected set size.", L"Warning", MB_OK | MB_ICONWARNING);
+            EnableWindow(hProcessButton, TRUE);
+            return;
+        }
         
         // Get list of files to process
         std::vector<std::wstring> files_to_process;
@@ -408,7 +498,9 @@ void ProcessBulkFiles(const std::wstring& input_dir, int set_size) {
         }
         
         if (files_to_process.empty()) {
-            SetWindowTextW(hStatusText, L"No valid files found to process.");
+            if (hMainWindow) {
+                PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(L"No valid files found to process."));
+            }
             MessageBoxW(hMainWindow, L"No valid files found to process.", L"Warning", MB_OK | MB_ICONWARNING);
             return;
         }
@@ -418,34 +510,82 @@ void ProcessBulkFiles(const std::wstring& input_dir, int set_size) {
         std::filesystem::create_directories(output_dir);
         
         // Setup progress bar
-        SendMessageW(hProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, files_to_process.size()));
+        int total_work = files_to_process.size() * combinations.size();
+        SendMessageW(hProgressBar, PBM_SETRANGE, 0, 100);
         SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
-        
-        // Process files
-        int processed = 0;
-        for (const auto& file_path : files_to_process) {
-            std::wstring filename = std::filesystem::path(file_path).filename().wstring();
-            std::wstring status = L"Processing: " + filename;
-            SetWindowTextW(hStatusText, status.c_str());
-            
-            std::string result = processFileWrapper(file_path, combinations, set_size, output_dir);
-            std::wcout << CSVManager::s2ws(result) << std::endl;
-            
-            processed++;
-            SendMessageW(hProgressBar, PBM_SETPOS, processed, 0);
+        SendMessageW(hProgressBar, PBM_SETSTEP, 1, 0);
+        if (hMainWindow) {
+            PostMessageW(hMainWindow, WM_UPDATE_PERCENT, 0, (LPARAM)new std::wstring(L"0%"));
+            PostMessageW(hMainWindow, WM_UPDATE_PROGRESS, 0, 0);
         }
         
-        SetWindowTextW(hStatusText, L"Processing finished successfully!");
-        MessageBoxW(hMainWindow, (L"Processing finished. Output saved in: " + output_dir).c_str(), L"Success", MB_OK | MB_ICONINFORMATION);
+        // Start timing
+        auto start_time = std::chrono::steady_clock::now();
+        
+        // Update status with total work info
+        std::wstring initial_status = L"Processing " + std::to_wstring(files_to_process.size()) + 
+                                    L" files with " + std::to_wstring(combinations.size()) + 
+                                    L" combinations each (" + std::to_wstring(total_work) + L" total operations)";
+        if (hMainWindow) {
+            PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(initial_status));
+        }
+        
+        // Process files
+        int total_combinations_processed = 0; // Initialize for progress tracking
+        for (size_t file_index = 0; file_index < files_to_process.size(); ++file_index) {
+            const auto& file_path = files_to_process[file_index];
+            std::wstring filename = std::filesystem::path(file_path).filename().wstring();
+            
+            // Update status to show current file
+            std::wstring file_status = L"Processing file: " + filename + L" (" + 
+                                     std::to_wstring(file_index + 1) + L"/" + 
+                                     std::to_wstring(files_to_process.size()) + L")";
+            if (hMainWindow) {
+                PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(file_status));
+            }
+            
+            // Process the file and get detailed progress updates
+            std::string result = processFileWrapper(file_path, combinations, set_size, output_dir, file_index, files_to_process.size(), total_combinations_processed, start_time);
+            std::wcout << CSVManager::s2ws(result) << std::endl;
+        }
+        
+        // Calculate total processing time
+        auto end_time = std::chrono::steady_clock::now();
+        auto total_time = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
+        int total_minutes = total_time.count() / 60;
+        int total_seconds = total_time.count() % 60;
+        
+        std::wstring completion_message;
+        if (total_minutes > 0) {
+            completion_message = L"Processing finished in " + std::to_wstring(total_minutes) + L"m " + std::to_wstring(total_seconds) + L"s";
+        } else {
+            completion_message = L"Processing finished in " + std::to_wstring(total_seconds) + L"s";
+        }
+        
+        if (hMainWindow) {
+            PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(completion_message));
+            PostMessageW(hMainWindow, WM_UPDATE_PERCENT, 0, (LPARAM)new std::wstring(L"100%"));
+            PostMessageW(hMainWindow, WM_UPDATE_PROGRESS, 100, 0);
+        }
+        
+        MessageBoxW(hMainWindow, (completion_message + L"\n\nOutput saved in: " + output_dir).c_str(), L"Success", MB_OK | MB_ICONINFORMATION);
         
     } catch (const std::exception& e) {
         std::wstring err = L"Error: ";
         err += CSVManager::s2ws(e.what());
-        SetWindowTextW(hStatusText, err.c_str());
+        if (hMainWindow) {
+            PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(err));
+            PostMessageW(hMainWindow, WM_UPDATE_PERCENT, 0, (LPARAM)new std::wstring(L"0%"));
+        }
         MessageBoxW(hMainWindow, err.c_str(), L"Error", MB_OK | MB_ICONERROR);
     }
     
-    SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
+    // Reset progress bar to 0% after completion or error
+    if (hMainWindow) {
+        PostMessageW(hMainWindow, WM_UPDATE_PERCENT, 0, (LPARAM)new std::wstring(L"0%"));
+        PostMessageW(hMainWindow, WM_UPDATE_PROGRESS, 0, 0);
+    }
+    
     EnableWindow(hProcessButton, TRUE);
 }
 
@@ -459,15 +599,26 @@ void OnProcess() {
     }
     
     EnableWindow(hProcessButton, FALSE);
-    SetWindowTextW(hStatusText, L"Starting processing...");
+    if (hMainWindow) {
+        PostMessageW(hMainWindow, WM_UPDATE_STATUS, 0, (LPARAM)new std::wstring(L"Starting processing..."));
+    }
     
-            // Get selected set size
-        for (size_t i = 0; i < 6; ++i) {
-            if (SendMessageW(hSetSizeVars[i], BM_GETCHECK, 0, 0) == BST_CHECKED) {
-                selectedSetSize = static_cast<int>(i + 3); // 3, 4, 5, 6, 7, 8
-                break;
-            }
+    // Reset progress bar
+    SendMessageW(hProgressBar, PBM_SETRANGE, 0, 100);
+    SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
+    SendMessageW(hProgressBar, PBM_SETSTEP, 1, 0);
+    if (hMainWindow) {
+        PostMessageW(hMainWindow, WM_UPDATE_PERCENT, 0, (LPARAM)new std::wstring(L"0%"));
+        PostMessageW(hMainWindow, WM_UPDATE_PROGRESS, 0, 0);
+    }
+    
+    // Get selected set size
+    for (size_t i = 0; i < 6; ++i) {
+        if (SendMessageW(hSetSizeVars[i], BM_GETCHECK, 0, 0) == BST_CHECKED) {
+            selectedSetSize = static_cast<int>(i + 3); // 3, 4, 5, 6, 7, 8
+            break;
         }
+    }
     
     // Start processing in separate thread
     std::thread([=]() {
@@ -490,7 +641,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     RegisterClassW(&wc);
 
     hMainWindow = CreateWindowExW(0, wc.lpszClassName, L"Bulk File Processor", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME | WS_MAXIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, nullptr, nullptr, hInstance, nullptr);
+        CW_USEDEFAULT, CW_USEDEFAULT, 800, 450, nullptr, nullptr, hInstance, nullptr);
 
     ShowWindow(hMainWindow, nCmdShow);
     UpdateWindow(hMainWindow);
@@ -506,6 +657,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_CREATE: {
+        // Set the global main window handle
+        hMainWindow = hwnd;
+        
         // Input Folder Label
         CreateWindowW(L"STATIC", L"Select Folder with Excel Files:", WS_VISIBLE | WS_CHILD,
             10, 20, 200, 20, hwnd, nullptr, nullptr, nullptr);
@@ -542,6 +696,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         hProgressBar = CreateWindowW(PROGRESS_CLASSW, L"", WS_VISIBLE | WS_CHILD,
             10, 220, 770, 20, hwnd, nullptr, nullptr, nullptr);
         
+        // Set progress bar properties for better visibility
+        SendMessageW(hProgressBar, PBM_SETRANGE, 0, 100);
+        SendMessageW(hProgressBar, PBM_SETPOS, 0, 0);
+        SendMessageW(hProgressBar, PBM_SETSTEP, 1, 0);
+        
+        // Progress Percentage Label
+        hProgressPercent = CreateWindowW(L"STATIC", L"0%", WS_VISIBLE | WS_CHILD | SS_CENTER,
+            10, 250, 770, 20, hwnd, nullptr, nullptr, nullptr);
+        
         break;
     }
     case WM_COMMAND: {
@@ -554,6 +717,34 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         }
         else if (wmId == 1) OnBrowseInput();
         else if (wmId == 20) OnProcess();
+        break;
+    }
+    case WM_UPDATE_PROGRESS: {
+        // Update progress bar
+        if (hProgressBar) {
+            SendMessageW(hProgressBar, PBM_SETPOS, wParam, 0);
+            // Force the progress bar to redraw
+            InvalidateRect(hProgressBar, nullptr, FALSE);
+            UpdateWindow(hProgressBar);
+        }
+        break;
+    }
+    case WM_UPDATE_STATUS: {
+        // Update status text
+        if (hStatusText && lParam) {
+            std::wstring* status = reinterpret_cast<std::wstring*>(lParam);
+            SetWindowTextW(hStatusText, status->c_str());
+            delete status; // Clean up allocated memory
+        }
+        break;
+    }
+    case WM_UPDATE_PERCENT: {
+        // Update percentage label
+        if (hProgressPercent && lParam) {
+            std::wstring* percent = reinterpret_cast<std::wstring*>(lParam);
+            SetWindowTextW(hProgressPercent, percent->c_str());
+            delete percent; // Clean up allocated memory
+        }
         break;
     }
     case WM_DESTROY:
